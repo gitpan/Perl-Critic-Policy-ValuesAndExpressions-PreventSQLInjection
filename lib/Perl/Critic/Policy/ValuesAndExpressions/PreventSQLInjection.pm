@@ -20,11 +20,11 @@ Perl::Critic::Policy::ValuesAndExpressions::PreventSQLInjection - Prevent SQL in
 
 =head1 VERSION
 
-Version 1.0.1
+Version 1.1.0
 
 =cut
 
-our $VERSION = '1.0.1';
+our $VERSION = '1.1.0';
 
 
 =head1 AFFILIATION
@@ -85,12 +85,6 @@ Possible future improvements for this module:
 
 =over 4
 
-=item * Detect concatenation
-
-Currently, this module only analyzes whole strings, and ignores concatenated strings or variables. For example, this would incorrectly not trigger a violation:
-
-	my $sql = 'SELECT * FROM ' . $table;
-
 =item * Detect use of sprintf()
 
 This should probably be considered a violation:
@@ -100,9 +94,14 @@ This should probably be considered a violation:
 		$table
 	);
 
-=item * Parse heredoc
+=item * Detect use of $dbh->quote() and $dbh->quote_identifier()
 
-This module does not analyze heredoc, but should since it interpolates variables by default.
+The following code will incorrectly trigger a violation:
+
+	my $sql = 'SELECT * FROM ' . $dbh->quote_identifier( $test );
+
+This is however quite a difficult problem, as the quote call can be hidden by
+several levels of indirection.
 
 =back
 
@@ -197,7 +196,10 @@ Return the class of elements this policy applies to.
 
 sub applies_to
 {
-	return 'PPI::Token::Quote';
+	return qw(
+		PPI::Token::Quote
+		PPI::Token::HereDoc
+	);
 }
 
 
@@ -218,31 +220,162 @@ sub violates
 
 	parse_comments( $self, $doc );
 
+	# Make sure the first string looks like a SQL statement before investigating
+	# further.
+	return ()
+		if !is_sql_statement( $element );
+
+	my $sql_injections = [];
+	my $token = $element;
+	while ( defined( $token ) && $token ne '' )
+	{
+		# If the token is a string, we need to analyze it for interpolated
+		# variables.
+		if ( $token->isa( 'PPI::Token::HereDoc' ) || $token->isa( 'PPI::Token::Quote' ) ) ## no critic (ControlStructures::ProhibitCascadingIfElse)
+		{
+			push( @$sql_injections, @{ analyze_sql_injections( $self, $token ) // [] } );
+		}
+		# If it is a concatenation operator, continue to the next token.
+		elsif ( $token->isa('PPI::Token::Operator') && $token->content() eq '.' )
+		{
+			# Skip to the next token.
+		}
+		# If it is a semicolon, we're at the end of the statement and we can finish
+		# the process.
+		elsif ( $token->isa('PPI::Token::Structure') && $token->content() eq ';' )
+		{
+			last;
+		}
+		# If it is a symbol, it is concatenated to a SQL statement which is an
+		# injection risk.
+		elsif ( $token->isa('PPI::Token::Symbol') )
+		{
+			push( @$sql_injections, $token->content() );
+		}
+
+		# Move to examining the next sibling token.
+		$token = $token->snext_sibling();
+	}
+
+	# Return violations if any.
+	return defined( $sql_injections ) && scalar( @$sql_injections ) != 0
+		? $self->violation(
+			$DESCRIPTION,
+			sprintf(
+				$EXPLANATION,
+				join( ', ', @$sql_injections ),
+			),
+			$element,
+		)
+		: ();
+}
+
+
+=head2 is_sql_statement()
+
+Return a boolean indicating whether a string is potentially the beginning of a SQL statement.
+
+	my $is_sql_statement = is_sql_statement( $token );
+
+=cut
+
+sub is_sql_statement
+{
+	my ( $token ) = @_;
+	my $content = get_token_content( $token );
+
+	return $content =~ /\b (?: SELECT | INSERT | UPDATE | DELETE ) \b/ix
+		? 1
+		: 0;
+}
+
+
+=head2 get_token_content()
+
+Return the text content of a PPI token.
+
+	my $content = get_token_content( $token );
+
+=cut
+
+sub get_token_content
+{
+	my ( $token ) = @_;
+
+	# Retrieve the string's content.
+	my $content;
+	if ( $token->isa('PPI::Token::HereDoc') )
+	{
+		my @heredoc = $token->heredoc();
+		pop( @heredoc ); # Remove the heredoc termination tag.
+		$content = join( '', @heredoc );
+	}
+	else
+	{
+		$content = $token->content();
+	}
+
+	return $content;
+}
+
+
+=head2 analyze_sql_injections()
+
+Analyze a token and returns an arrayref of variables that are potential SQL
+injection vectors.
+
+	my $sql_injection_vector_names = analyze_sql_injections(
+		$policy, # this object
+		$token,
+	);
+
+=cut
+
+sub analyze_sql_injections
+{
+	my ( $policy, $token ) = @_;
+
 	my $sql_injections =
 	try
 	{
-		my $content = $element->content();
-		return if $content !~ /\b (?: SELECT | INSERT | UPDATE | DELETE ) \b/ix;
+		# Single quoted strings aren't prone to SQL injection.
+		return
+			if $token->isa('PPI::Token::Quote::Single');
 
-		# Comments will appear at the end of the element, so we need to
-		# determine the ending line number instead of the beginning line
-		# number.
+		# PPI treats HereDoc differently than Quote and QuoteLike for the moment,
+		# this may however change in the future according to the documentation of
+		# PPI.
+		my $is_heredoc = $token->isa('PPI::Token::HereDoc');
+
+		# Retrieve the string's content.
+		my $content = get_token_content( $token );
+
+		# Find the list of variables marked as safe using "## SQL safe".
+		# Note: comments will appear at the end of the token, so we need to
+		#       determine the ending line number instead of the beginning line
+		#       number.
 		my $extra_height_span =()= $content =~ /\n/g;
 		my $safe_variables = get_safe_variables(
-			$self,
-			$element->line_number() + $extra_height_span
+			$policy, #$self
+			$token->line_number()
+				# Heredoc comments will be on the same line as the opening marker.
+				+ ( $is_heredoc ? 0 : $extra_height_span ),
 		);
+
+		# Find all the variables that appear in the string.
 		my $unsafe_variables = [
 			grep { !$safe_variables->{ $_ } }
 			@{ extract_variables( $content ) }
 		];
 
-		if ( $element->isa('PPI::Token::Quote::Double') )
+		# Based on the token type, determine if it is interpolated and report any
+		# unsafe variables.
+		if ( $token->isa('PPI::Token::Quote::Double') )
 		{
 			return $unsafe_variables
 				if scalar( @$unsafe_variables ) != 0;
 		}
-		elsif ( $element->isa('PPI::Token::Quote::Interpolate') )
+		elsif ( $token->isa('PPI::Token::Quote::Interpolate') )
 		{
 			my ( $lead ) = $content =~ /\A(qq?)([^q])/s;
 			croak "Unknown format for >$content<"
@@ -250,6 +383,18 @@ sub violates
 
 			# Skip single quoted strings.
 			return if $lead eq 'q';
+
+			return $unsafe_variables
+				if scalar( @$unsafe_variables ) != 0;
+		}
+		elsif ( $is_heredoc )
+		{
+			# Single quoted heredocs are not interpolated, so they're safe.
+			# Note: '_mode' doesn't seem to be publicly accessible, and the tokenizer
+			#       destroys the part of the heredoc termination marker that would
+			#       allow determining whether it's interpolated, so the only option
+			#       is to rely on the private property of the token here.
+			return if $token->{'_mode'} ne 'interpolate';
 
 			return $unsafe_variables
 				if scalar( @$unsafe_variables ) != 0;
@@ -263,16 +408,7 @@ sub violates
 		return;
 	};
 
-	return defined( $sql_injections ) && scalar( @$sql_injections ) != 0
-		? $self->violation(
-			$DESCRIPTION,
-			sprintf(
-				$EXPLANATION,
-				join( ', ', @$sql_injections ),
-			),
-			$element,
-		)
-		: ();
+	return $sql_injections // [];
 }
 
 

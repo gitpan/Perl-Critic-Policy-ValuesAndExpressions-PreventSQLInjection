@@ -4,7 +4,7 @@
       "Guillaume Aubert <aubertg@cpan.org>"
    ],
    "dynamic_config" : 1,
-   "generated_by" : "Module::Build version 0.4003, CPAN::Meta::Converter version 2.120921",
+   "generated_by" : "Module::Build version 0.4007, CPAN::Meta::Converter version 2.132830",
    "license" : [
       "open_source"
    ],
@@ -42,7 +42,7 @@
    "provides" : {
       "Perl::Critic::Policy::ValuesAndExpressions::PreventSQLInjection" : {
          "file" : "lib/Perl/Critic/Policy/ValuesAndExpressions/PreventSQLInjection.pm",
-         "version" : "v1.0.1"
+         "version" : "v1.1.0"
       }
    },
    "release_status" : "stable",
@@ -58,5 +58,5 @@
          "url" : "https://github.com/guillaumeaubert/Perl-Critic-Policy-ValuesAndExpressions-PreventSQLInjection"
       }
    },
-   "version" : "v1.0.1"
+   "version" : "v1.1.0"
 }
