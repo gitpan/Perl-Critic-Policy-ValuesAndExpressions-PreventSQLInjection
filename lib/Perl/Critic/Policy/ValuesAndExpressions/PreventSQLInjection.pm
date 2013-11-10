@@ -20,11 +20,11 @@ Perl::Critic::Policy::ValuesAndExpressions::PreventSQLInjection - Prevent SQL in
 
 =head1 VERSION
 
-Version 1.1.0
+Version 1.1.1
 
 =cut
 
-our $VERSION = '1.1.0';
+our $VERSION = '1.1.1';
 
 
 =head1 AFFILIATION
@@ -233,7 +233,7 @@ sub violates
 		# variables.
 		if ( $token->isa( 'PPI::Token::HereDoc' ) || $token->isa( 'PPI::Token::Quote' ) ) ## no critic (ControlStructures::ProhibitCascadingIfElse)
 		{
-			push( @$sql_injections, @{ analyze_sql_injections( $self, $token ) // [] } );
+			push( @$sql_injections, @{ analyze_sql_injections( $self, $token ) || [] } );
 		}
 		# If it is a concatenation operator, continue to the next token.
 		elsif ( $token->isa('PPI::Token::Operator') && $token->content() eq '.' )
@@ -408,7 +408,9 @@ sub analyze_sql_injections
 		return;
 	};
 
-	return $sql_injections // [];
+	return defined( $sql_injections )
+		? $sql_injections
+		: [];
 }
 
 
