@@ -20,11 +20,11 @@ Perl::Critic::Policy::ValuesAndExpressions::PreventSQLInjection - Prevent SQL in
 
 =head1 VERSION
 
-Version 1.1.1
+Version 1.1.2
 
 =cut
 
-our $VERSION = '1.1.1';
+our $VERSION = '1.1.2';
 
 
 =head1 AFFILIATION
@@ -243,6 +243,12 @@ sub violates
 		# If it is a semicolon, we're at the end of the statement and we can finish
 		# the process.
 		elsif ( $token->isa('PPI::Token::Structure') && $token->content() eq ';' )
+		{
+			last;
+		}
+		# If it is a list-separating comma, this list element ends here and we can
+		# finish the process.
+		elsif ( $token->isa('PPI::Token::Operator') && $token->content() eq ',' )
 		{
 			last;
 		}
