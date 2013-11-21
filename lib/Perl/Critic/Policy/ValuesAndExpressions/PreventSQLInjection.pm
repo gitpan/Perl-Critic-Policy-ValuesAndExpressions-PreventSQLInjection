@@ -20,11 +20,11 @@ Perl::Critic::Policy::ValuesAndExpressions::PreventSQLInjection - Prevent SQL in
 
 =head1 VERSION
 
-Version 1.1.2
+Version 1.1.3
 
 =cut
 
-our $VERSION = '1.1.2';
+our $VERSION = '1.1.3';
 
 
 =head1 AFFILIATION
@@ -290,7 +290,7 @@ sub is_sql_statement
 	my ( $token ) = @_;
 	my $content = get_token_content( $token );
 
-	return $content =~ /\b (?: SELECT | INSERT | UPDATE | DELETE ) \b/ix
+	return $content =~ /^ \s* (?: SELECT | INSERT | UPDATE | DELETE ) \b/six
 		? 1
 		: 0;
 }
@@ -315,6 +315,11 @@ sub get_token_content
 		my @heredoc = $token->heredoc();
 		pop( @heredoc ); # Remove the heredoc termination tag.
 		$content = join( '', @heredoc );
+	}
+	elsif ( $token->isa('PPI::Token::Quote' ) )
+	{
+		# ->string() strips off the leading and trailing quotation signs.
+		$content = $token->string();
 	}
 	else
 	{
@@ -383,8 +388,9 @@ sub analyze_sql_injections
 		}
 		elsif ( $token->isa('PPI::Token::Quote::Interpolate') )
 		{
-			my ( $lead ) = $content =~ /\A(qq?)([^q])/s;
-			croak "Unknown format for >$content<"
+			my $raw_content = $token->content();
+			my ( $lead ) = $raw_content =~ /\A(qq?)([^q])/s;
+			croak "Unknown format for >$raw_content<"
 				if !defined( $lead );
 
 			# Skip single quoted strings.
