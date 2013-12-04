@@ -20,11 +20,11 @@ Perl::Critic::Policy::ValuesAndExpressions::PreventSQLInjection - Prevent SQL in
 
 =head1 VERSION
 
-Version 1.1.3
+Version 1.1.4
 
 =cut
 
-our $VERSION = '1.1.3';
+our $VERSION = '1.1.4';
 
 
 =head1 AFFILIATION
@@ -256,7 +256,10 @@ sub violates
 		# injection risk.
 		elsif ( $token->isa('PPI::Token::Symbol') )
 		{
-			push( @$sql_injections, $token->content() );
+			my $safe_variables = get_safe_variables( $self, $token->line_number() );
+			my $variable = get_complete_variable( $token );
+			push( @$sql_injections, $variable )
+				if !exists( $safe_variables->{ $variable } );
 		}
 
 		# Move to examining the next sibling token.
@@ -274,6 +277,50 @@ sub violates
 			$element,
 		)
 		: ();
+}
+
+
+=head2 get_complete_variable()
+
+Retrieve a complete variable starting with a PPI::Token::Symbol object.
+
+	my $variable = get_complete_variable( $token );
+
+For example, if you have $variable->{test}->[0] in your code, PPI will identify
+$variable as a PPI::Token::Symbol, and calling this function on that token will
+return the whole "$variable->{test}->[0]" string.
+
+=cut
+
+sub get_complete_variable
+{
+	my ( $token ) = @_;
+
+	croak 'The first parameter needs to be a PPI::Token::Symbol object'
+		if !$token->isa('PPI::Token::Symbol');
+
+	my $variable = $token->content();
+	my $sibling = $token;
+	while ( 1 )
+	{
+		$sibling = $sibling->next_sibling();
+		last if !defined( $sibling ) || ( $sibling eq '' );
+
+		if ( $sibling->isa('PPI::Token::Operator') && $sibling->content() eq '->' )
+		{
+			$variable .= '->';
+		}
+		elsif ( $sibling->isa('PPI::Structure::Subscript') )
+		{
+			$variable .= $sibling->content();
+		}
+		else
+		{
+			last;
+		}
+	}
+
+	return $variable;
 }
 
 
@@ -515,7 +562,7 @@ sub parse_comments
 		SQL \s+ safe
 		\s*
 		# List of safe variables between parenthesis, space separated.
-		\((.*?)\)
+		\(\s*(.*?)\s*\)
 	/ixms;
 
 	# Parse all the comments for this document.
