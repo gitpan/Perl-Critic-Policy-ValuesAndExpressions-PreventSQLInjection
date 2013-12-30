@@ -20,11 +20,11 @@ Perl::Critic::Policy::ValuesAndExpressions::PreventSQLInjection - Prevent SQL in
 
 =head1 VERSION
 
-Version 1.1.5
+Version 1.2.0
 
 =cut
 
-our $VERSION = '1.1.5';
+our $VERSION = '1.2.0';
 
 
 =head1 AFFILIATION
@@ -75,6 +75,10 @@ whitelisting specific variables:
 
 That said, you should always convert your code to use placeholders instead
 where possible.
+
+Note: this policy supports both comma-separated and space-separated lists to
+describe safe variables. In other words, C<## SQL safe ($var1, $var2, ...)> and
+C<## SQL safe ($var1 $var2 ...)> are strictly equivalent.
 
 
 =head1 LIMITATIONS
@@ -133,9 +137,9 @@ Readonly::Scalar my $VARIABLES_REGEX => qr/
 			(?:->)?
 			# Can be followed by either a hash or an array.
 			(?:
-				\{['"]?\w+['"]?\} # Hash element.
+				\{(?:\w+|'[^']+'|"[^"]+")\}  # Hash element.
 				|
-				\[['"]?\w+['"]?\] # Array element.
+				\[['"]?\d+['"]?\]            # Array element.
 			)
 		)*
 	)
@@ -143,12 +147,29 @@ Readonly::Scalar my $VARIABLES_REGEX => qr/
 
 # Name of the methods that make a variable safe to use in SQL strings.
 Readonly::Scalar my $QUOTING_METHODS_REGEX => qr/
+	^
 	(?:
 		quote_identifier
 		|
 		quote
 	)
+	$
 /x;
+
+# Regex to detect comments like ## SQL safe ($var1, $var2).
+Readonly::Scalar my $SQL_SAFE_COMMENTS_REGEX => qr/
+	\A
+	(?: [#]! .*? )?
+	\s*
+	# Find the ## annotation starter.
+	[#][#]
+	\s*
+	# "SQL safe" is our keyword.
+	SQL \s+ safe
+	\s*
+	# List of safe variables between parentheses.
+	\(\s*(.*?)\s*\)
+/ixms;
 
 
 =head1 FUNCTIONS
@@ -514,6 +535,7 @@ sub extract_variables
 		push( @$variables, $variable );
 		$string =~ s/\Q$variable\E//g;
 	}
+	#print STDERR "Interpolated variables: ", Dumper( $variables ), "\n";
 
 	return $variables;
 }
@@ -573,38 +595,23 @@ sub parse_comments
 	return
 		if defined( $self->{'_sqlsafe'} );
 
-	# Regex to detect comments like ## SQL safe ($var1, $var2)
-	my $comments_regex = qr/
-		\A
-		(?: [#]! .*? )?
-		\s*
-		# Find the ## annotation starter.
-		[#][#]
-		\s*
-		# "SQL safe" is our keyword.
-		SQL \s+ safe
-		\s*
-		# List of safe variables between parenthesis, space separated.
-		\(\s*(.*?)\s*\)
-	/ixms;
-
 	# Parse all the comments for this document.
 	$self->{'_sqlsafe'} = {};
 	my $comments = $doc->find('PPI::Token::Comment') || [];
 	foreach my $comment ( @$comments )
 	{
 		# Determine if the line is a "SQL safe" comment.
-		my ( $safe_variables ) = $comment =~ $comments_regex;
+		my ( $safe_variables ) = $comment =~ $SQL_SAFE_COMMENTS_REGEX;
 		next if !defined( $safe_variables );
 
 		# Store list of safe variables for that line.
 		push(
 			@{ $self->{'_sqlsafe'}->{ $comment->line_number() } },
-			split( /\s+/, $safe_variables )
+			split( /[\s,]+(?=[\$\@\%])/, $safe_variables )
 		);
 	}
 
-	#print Dumper( $self->{'_sqlsafe'} ), "\n";
+	#print STDERR "SQL safe variables: ", Dumper( $self->{'_sqlsafe'} ), "\n";
 	return;
 }
 
